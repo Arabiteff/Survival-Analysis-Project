@@ -16,6 +16,7 @@ demographic groups or subscription types. This comparison will help identify whe
 their subscriptions than others.
 3. Semi-parametric Cox Regression: To further explore the factors influencing customer attrition, we will apply Cox proportional hazards regression. This model will allow us to assess the impact of various covariates, such as age, gender, and product
 type, on the risk of subscription cancellation.
+
 The outcomes of this analysis will provide insights into customer behavior, which can be leveraged to enhance retention strategies and
 optimize customer support operations.
 
