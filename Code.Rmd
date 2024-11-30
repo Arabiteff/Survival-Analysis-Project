@@ -1,0 +1,1450 @@
+---
+title: "Group 11 - Survival Analysis"
+author: "Bryen PARAMAGAMSAN - Ammar TARIQ - Ayoge BASSEY - Mohamed El'Arabi TEFFAHI"
+output:
+  pdf_document:
+    toc: false
+    toc_depth: 1
+    includes:
+      in_header: preamble.tex
+    latex_engine: xelatex
+header-includes:
+   - \usepackage{geometry}
+   - \geometry{margin=0.5in}
+   - \usepackage{anyfontsize}
+   - \AtBeginDocument{\fontsize{9pt}{10pt}\selectfont}
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, cache = FALSE, warning = FALSE, fig.align = 'center')
+```
+
+# Introduction
+
+In this project, we perform a comprehensive statistical analysis of customer subscription data from a digital product offering that includes financial advisory services such as newsletters, webinars, and investment recommendations. The primary focus of this analysis is to understand the dynamics of customer retention and attrition over time. The dataset, sourced from Kaggle (available [here](https://www.kaggle.com/datasets/gsagar12/dspp1/data)), provides information on customer demographics, subscription details, and customer interactions with the company's call center.
+
+The analysis is structured around three key statistical methods:
+
+1. **Nonparametric Survival Analysis**: This method will be employed to estimate the survival function, which represents the probability that a customer will continue their subscription beyond a certain time point. The Kaplan-Meier estimator will be used for this purpose, providing insights into the typical lifespan of a subscription.
+
+2. **Nonparametric Comparison of Groups**: We will compare the survival functions across different customer segments, such as demographic groups or subscription types. This comparison will help identify whether certain groups are more likely to cancel their subscriptions than others.
+
+3. **Semi-parametric Cox Regression**: To further explore the factors influencing customer attrition, we will apply Cox proportional hazards regression. This model will allow us to assess the impact of various covariates, such as age, gender, and product type, on the risk of subscription cancellation.
+
+The outcomes of this analysis will provide insights into customer behavior, which can be leveraged to enhance retention strategies and optimize customer support operations.
+
+
+# Dataset overview
+
+```{r, results='hide', message=FALSE}
+# Set current working directory
+setwd("C:/Users/Ammar/OneDrive/4 - DSTI/3 - Projet/5 - Survival Analysis/2 - R Markdown/Dataset")
+
+# Load libraries
+library(readr)
+library(dplyr)
+
+# Load CSV files
+customer_cases <- read_csv("customer_cases.csv", show_col_types = FALSE)
+customer_info <- read_csv("customer_info.csv", show_col_types = FALSE)
+customer_product <- read_csv("customer_product.csv", show_col_types = FALSE)
+product_info <- read_csv("product_info.csv", show_col_types = FALSE)
+
+# Remove the first column from customer dataset
+customer_cases <- customer_cases[ , -1]
+customer_info <- customer_info[ , -1]
+customer_product <- customer_product[ , -1]
+```
+
+```{r, eval=FALSE}
+# Display the first few rows of each dataset
+head(customer_cases)
+head(customer_info)
+head(customer_product)
+head(product_info)
+
+```
+
+```{r, eval=FALSE}
+
+# We first need to check what is the range of our different values
+
+# CUSTOMER CASES
+
+# Check all unique values in the channel column
+unique_channels <- unique(customer_cases$channel)
+print("CUSTOMER CASES Unique channels:")
+print(unique_channels)
+
+# Check all unique values in the reason column
+unique_reasons <- unique(customer_cases$reason)
+print("CUSTOMER CASES Unique reasons:")
+print(unique_reasons)
+
+# CUSTOMER PRODUCT
+
+# Check all unique values in the product column
+unique_products <- unique(customer_product$product)
+print("CUSTOMER PRODUCT Unique products:")
+print(unique_products)
+
+# PRODUCT INFORMATION
+
+# Check all unique values in the billing_cycle column
+unique_billing_cycles <- unique(product_info$billing_cycle)
+print("PRODUCT INFORMATION Unique billing cycles:")
+print(unique_billing_cycles)
+
+
+```
+
+The dataset is composed of four correlated tables, each providing different aspects of information related to customer subscriptions and interactions. These tables are:
+
+### 1. Customer Cases (`customer_cases`)
+This table records individual customer interactions with the company's call center. Each row represents a unique case, providing details about the interaction, including the date and time of the case, the channel through which the customer reached out, and the reason for the interaction.
+
+- **Columns**:
+  - `case_id`: Unique identifier for each customer case.
+  - `date_time`: Timestamp of when the interaction occurred.
+  - `customer_id`: Unique identifier for the customer involved in the case.
+  - `channel`: The communication channel used for the interaction (phone or email).
+  - `reason`: The purpose of the interaction (signup or support).
+
+### 2. Customer Information (`customer_info`)
+This table contains demographic information about the customers. Each row corresponds to a unique customer, providing details such as age and gender.
+
+- **Columns**:
+  - `customer_id`: Unique identifier for each customer.
+  - `age`: Age of the customer.
+  - `gender`: Gender of the customer.
+
+### 3. Customer Product (`customer_product`)
+This table captures customer subscription details. Each row represents a subscription to a product, including when the customer signed up and, when they canceled the subscription.
+
+- **Columns**:
+  - `customer_id`: Unique identifier for the customer.
+  - `product`: Identifier for the subscribed product.
+  - `signup_date_time`: Timestamp of when the customer signed up for the product.
+  - `cancel_date_time`: Timestamp of when the customer canceled the subscription (if they canceled).
+
+### 4. Product Information (`product_info`)
+This table provides details about the products available for subscription. Each row corresponds to a unique product, including its pricing and billing cycle.
+
+- **Columns**:
+  - `product_id`: Unique identifier for each product.
+  - `name`: Name of the product, they are two products in total.
+  - `price`: Price of the product.
+  - `billing_cycle`: The billing cycle of the product, indicating how often the customer is billed in number of months. It is either 1 for monthly, or 12 for annually.
+
+
+```{r, results="hide", message=FALSE, warning=FALSE}
+# We will assure that all dates in all tables are in the correct format
+
+# Load libraries
+library(lubridate)
+
+# Convert date columns in customer_cases
+customer_cases <- customer_cases %>%
+  mutate(date_time = ymd_hms(date_time))
+
+# Convert date columns in customer_product
+customer_product <- customer_product %>%
+  mutate(signup_date_time = ymd_hms(signup_date_time),
+         cancel_date_time = ymd_hms(cancel_date_time))
+
+```
+
+```{r}
+# We will compute additional columns in our tables
+
+# Compute the duration in days
+customer_product <- customer_product %>%
+  mutate(duration = ifelse(!is.na(cancel_date_time),
+                           as.numeric(difftime(cancel_date_time, signup_date_time, units = "days")),
+                           NA))
+
+# Add a cancellation column
+customer_product <- customer_product %>%
+  mutate(cancellation = ifelse(!is.na(cancel_date_time), "Yes", "No"))
+```
+
+
+```{r, eval=FALSE}
+head(customer_product)
+```
+
+## Analysis of Age Distribution
+
+The distribution of customer age is analyzed using three methods: a histogram with an overlaid normal distribution curve, a Q-Q plot, and the Shapiro-Wilk normality test. These methods help assess whether the age distribution follows a normal (Gaussian) distribution.
+
+### 1. Analysis of Customer Age Distribution by Gender
+
+```{r, fig.width=6, fig.height=3}
+# We have the age of each customer. We can plot the distribution of the age of the customers.
+
+# Load libraries
+library(ggplot2)
+
+# Plot the distribution of age with stacked columns by gender and normal distribution
+ggplot(customer_info, aes(x = age, fill = gender)) +
+  geom_histogram(aes(y = ..density..), binwidth = 3, color = "black", alpha = 0.7, position = "stack") +
+  stat_function(fun = dnorm, args = list(mean = mean(customer_info$age, na.rm = TRUE), 
+                                         sd = sd(customer_info$age, na.rm = TRUE)), 
+                color = "red", size = 1) +
+  labs(title = "Distribution of Customer Age by Gender with Normal Curve",
+       x = "Age",
+       y = "Density",
+       fill = "Gender") +
+  theme_minimal()
+
+```
+The histogram shows the distribution of customer ages for both male and female customers.
+
+- **Central distribution**: Most customers are in the 50-60 age range, indicating that this middle-aged group is the most common among customers, suggesting the product or service appeals strongly to them.
+
+- **Gender Proportions**: There are more female customers than male customers in the 50-65 age range, which may suggest the product or service is slightly more popular or retained better by females in this group. Males are also common in this range but in slightly lower numbers compared to females.
+
+- **Age Extremes**: Fewer customers are under 40 or over 70, and the numbers are similar between males and females, indicating that the product or service is less appealing or relevant to these age groups.
+
+### 2. Histogram with Normal Curve
+
+```{r, fig.width=6, fig.height=4, results='hide', fig.keep = "none"}
+# Plot histogram with normal distribution overlay
+ggplot(customer_info, aes(x = age)) +
+  geom_histogram(aes(y = ..density..), binwidth = 3, fill = "blue", color = "black", alpha = 0.7) +
+  stat_function(fun = dnorm, args = list(mean = mean(customer_info$age, na.rm = TRUE), 
+                                         sd = sd(customer_info$age, na.rm = TRUE)), 
+                color = "red", size = 1) +
+  labs(title = "Distribution of Customer Age with Normal Curve",
+       x = "Age",
+       y = "Density") +
+  theme_minimal()
+
+```
+
+The histogram shows the distribution of customer ages with a red curve representing the expected normal distribution, based on the mean and standard deviation of the data. Visually, the age distribution appears to be somewhat bell-shaped, which suggests it might approximate a normal distribution. However, there are notable deviations, particularly in the tails of the distribution.
+
+### 3. Q-Q Plot
+
+```{r, fig.width=6, fig.height=2}
+# Q-Q plot to check normality
+ggplot(customer_info, aes(sample = age)) +
+  stat_qq() +
+  stat_qq_line(color = "red") +
+  labs(title = "Q-Q Plot of Customer Age",
+       x = "Theoretical Quantiles",
+       y = "Sample Quantiles") +
+  theme_minimal()
+```
+
+The Q-Q plot compares the quantiles of the observed age distribution to the quantiles of a normal distribution. In a perfectly normal distribution, all points would lie along the red diagonal line.
+
+- **Observations**:
+  - The points deviate from the line, particularly in the lower and upper quantiles, indicating that the age distribution is not perfectly normal.
+  - The middle quantiles (representing the majority of the data) align relatively well with the line, suggesting that the central portion of the distribution is more normally distributed.
+
+### 4. Shapiro-Wilk Normality Test
+
+```{r, results='hide'}
+
+# Shapiro-Wilk test
+
+# Randomly sample 5000 observations 
+set.seed(123) 
+sample_data <- sample(customer_info$age, size = 5000, replace = FALSE)
+
+# Perform the Shapiro-Wilk test on the sample
+shapiro_test <- shapiro.test(sample_data)
+
+# Display the result
+shapiro_test
+
+```
+
+To statistically assess the normality of the age distribution, the Shapiro-Wilk test was performed on a random sample of 5000 customer ages.
+
+The Shapiro-Wilk test results indicate a p-value less than 0.05, suggesting that we can reject the null hypothesis that the data is normally distributed. This aligns with the visual observations from the Q-Q plot and histogram, where deviations from normality were observed, particularly in the tails.
+
+### 5. Conclusion
+
+The combination of visual and statistical methods suggests that while the age distribution has some characteristics of a normal distribution, particularly in its central range, it is not perfectly Gaussian.
+
+## Analysis of Subscription Duration and Age by Gender
+
+### 1. Distribution of Subscription Duration by Gender
+
+```{r, fig.width=6, fig.height=2}
+
+# We can also check the distribution of number of days of a subscription in our dataset
+
+# Merge customer_product with customer_info to get the gender information
+merged_data <- customer_product %>%
+  inner_join(customer_info, by = "customer_id")
+
+# Plot the distribution of duration with stacked columns by gender
+ggplot(merged_data, aes(x = duration, fill = gender)) +
+  geom_histogram(binwidth = 30, color = "black", alpha = 0.7, position = "stack") +
+  labs(title = "Distribution of Subscription Duration by Gender",
+       x = "Duration (days)",
+       y = "Frequency",
+       fill = "Gender") +
+  theme_minimal()
+
+```
+
+- **Shape of Distribution**: The distribution of subscription duration is right-sided, indicating that most customers have shorter subscriptions.
+- **Gender Differences**: Males tend to retain subscriptions slightly longer than females, particularly in the early subscription period (0-500 days). Both genders show a decline in frequency with increasing duration.
+
+### 2. Age vs. Duration with Frequency (Hexbin Plot)
+
+```{r, fig.width=6, fig.height=2}
+# With a hexbin plot, we can see what is the relation between age, duration of subscription and the frequency.
+
+# Load libraries
+library(hexbin)
+
+# Hexbin plot of age vs. duration
+ggplot(customer_product %>% inner_join(customer_info, by = "customer_id"), aes(x = age, y = duration)) +
+  geom_hex(bins = 30) +
+  scale_fill_viridis_c() +
+  labs(title = "Age vs. Duration with Frequency",
+       x = "Age",
+       y = "Duration (days)",
+       fill = "Count") +
+  theme_minimal()
+
+
+```
+
+- **Concentration of Customers**: Customers aged 40-70 are most frequent and tend to have subscription durations up to 600-700 days.
+- **Age Extremes**: Younger (<40) and older (>70) customers are less frequent and have a wider range of subscription durations.
+
+### 3. Conclusion
+
+- **Gender Insight**: Male customers may retain subscriptions slightly longer than females, particularly in the early stages.
+- **Age Insight**: Middle-aged customers (40-70) are the most common and tend to have longer subscriptions.
+
+```{r}
+library(dplyr)
+library(tidyr)
+
+# Count the total number of occurrences for each customer_id
+customer_total_counts <- customer_cases %>%
+  group_by(customer_id) %>%
+  summarize(total_contacts = n())
+
+# Count the number of times each customer_id contacted for support
+customer_support_counts <- customer_cases %>%
+  filter(reason == "support") %>%
+  group_by(customer_id) %>%
+  summarize(support_contacts = n())
+
+# Combine the two counts into a single data frame
+customer_counts <- customer_total_counts %>%
+  left_join(customer_support_counts, by = "customer_id") %>%
+  replace_na(list(support_contacts = 0))
+
+# Calculate time between each support contact
+support_times <- customer_cases %>%
+  filter(reason == "support") %>%
+  arrange(customer_id, date_time) %>%
+  group_by(customer_id) %>%
+  mutate(time_between_supports = as.numeric(difftime(date_time, lag(date_time), units = "days"))) %>%
+  select(customer_id, date_time, time_between_supports)
+
+# Calculate time between subscription and first support contact
+subscription_support_times <- customer_cases %>%
+  filter(reason %in% c("signup", "support")) %>%
+  arrange(customer_id, date_time) %>%
+  group_by(customer_id) %>%
+  mutate(time_from_signup_to_first_support = ifelse(reason == "support",
+                                                    as.numeric(difftime(date_time, first(date_time[reason == "signup"]), units = "days")),
+                                                    NA)) %>%
+  filter(reason == "support") %>%
+  select(customer_id, date_time, time_from_signup_to_first_support)
+
+# Combine the calculated times with the customer_counts data
+customer_counts <- customer_counts %>%
+  left_join(support_times, by = "customer_id") %>%
+  left_join(subscription_support_times, by = c("customer_id", "date_time")) %>%
+  replace_na(list(time_between_supports = NA, time_from_signup_to_first_support = NA))
+
+# Identify the maximum number of support calls
+max_support_calls <- max(customer_counts$support_contacts)
+
+# Calculate time between consecutive support contacts
+support_times <- customer_cases %>%
+  filter(reason == "support") %>%
+  arrange(customer_id, date_time) %>%
+  group_by(customer_id) %>%
+  mutate(support_number = row_number(),
+         next_support_time = lead(date_time),
+         time_between_supports = as.numeric(difftime(next_support_time, date_time, units = "days"))) %>%
+  ungroup()
+
+# Create columns for each time difference up to the max number of support calls
+customer_counts_extended <- customer_counts
+
+for (i in 1:(max_support_calls - 1)) {
+  column_name <- paste0("time_from_support_", i, "_to_support_", i + 1)
+  
+  # Add the calculated time differences as new columns
+  customer_counts_extended <- customer_counts_extended %>%
+    left_join(
+      support_times %>%
+        filter(support_number == i) %>%
+        select(customer_id, !!column_name := time_between_supports),
+      by = "customer_id"
+    )
+}
+
+```
+
+```{r}
+
+# Identify customers who signed up
+customers_signup <- customer_cases %>%
+  filter(reason == "signup") %>%
+  select(customer_id) %>%
+  distinct()  
+
+# Determine which customers who signed up later contacted support
+customers_support_after_signup <- customer_cases %>%
+  filter(reason == "support") %>%
+  select(customer_id) %>%
+  distinct() %>%
+  inner_join(customers_signup, by = "customer_id")  
+
+# Calculate the probability
+total_signed_up <- nrow(customers_signup)
+total_contacted_support <- nrow(customers_support_after_signup)
+probability_support_after_signup <- total_contacted_support / total_signed_up
+
+# Identify customers who contacted support at least once
+customers_support_once <- customer_cases %>%
+  filter(reason == "support") %>%
+  group_by(customer_id) %>%
+  summarize(support_contacts = n()) %>%
+  filter(support_contacts >= 1)
+
+# Determine which customers contacted support a second time
+customers_support_twice <- customers_support_once %>%
+  filter(support_contacts >= 2)
+
+# Calculate the probability
+total_support_once <- nrow(customers_support_once)
+total_support_twice <- nrow(customers_support_twice)
+probability_support_twice <- total_support_twice / total_support_once
+
+# Identify customers who contacted support at least twice
+customers_support_twice <- customer_cases %>%
+  filter(reason == "support") %>%
+  group_by(customer_id) %>%
+  summarize(support_contacts = n()) %>%
+  filter(support_contacts >= 2)
+
+# Determine which customers contacted support a third time
+customers_support_thrice <- customers_support_twice %>%
+  filter(support_contacts >= 3)
+
+# Calculate the probability
+total_support_twice <- nrow(customers_support_twice)
+total_support_thrice <- nrow(customers_support_thrice)
+probability_support_thrice <- total_support_thrice / total_support_twice
+
+# Identify customers who contacted support at least three times
+customers_support_thrice <- customer_cases %>%
+  filter(reason == "support") %>%
+  group_by(customer_id) %>%
+  summarize(support_contacts = n()) %>%
+  filter(support_contacts >= 3)
+
+# Determine which customers contacted support a fourth time
+customers_support_four_times <- customers_support_thrice %>%
+  filter(support_contacts >= 4)
+
+# Calculate the probability
+total_support_thrice <- nrow(customers_support_thrice)
+total_support_four_times <- nrow(customers_support_four_times)
+probability_support_four_times <- total_support_four_times / total_support_thrice
+
+```
+
+
+```{r, eval=FALSE}
+
+# Output the probability
+cat("The probability that a customer will contact support after signing up is:", 
+    round(probability_support_after_signup * 100, 2), "%\n")
+
+# Output the probability
+cat("The probability that a customer who has contacted support once will contact support a second time is:", 
+    round(probability_support_twice * 100, 2), "%\n")
+
+# Output the probability
+cat("The probability that a customer who has contacted support twice will contact support a third time is:", 
+    round(probability_support_thrice * 100, 2), "%\n")
+
+# Output the probability
+cat("The probability that a customer who has contacted support three times will contact support a fourth time is:", 
+    round(probability_support_four_times * 100, 2), "%\n")
+
+```
+
+
+```{r}
+
+library(dplyr)
+
+# Identify customers who signed up
+customers_signup <- customer_cases %>%
+  filter(reason == "signup") %>%
+  select(customer_id, date_time) %>%
+  distinct()
+
+# Determine which customers who signed up later contacted support
+customers_support_after_signup <- customer_cases %>%
+  filter(reason == "support") %>%
+  select(customer_id, date_time, channel) %>%
+  distinct() %>%
+  inner_join(customers_signup, by = "customer_id") %>%
+  mutate(days_from_signup = as.numeric(difftime(date_time.x, date_time.y, units = "days")))
+
+# Calculate the probability and channel repartition
+total_signed_up <- nrow(customers_signup)
+total_contacted_support <- nrow(customers_support_after_signup)
+probability_support_after_signup <- total_contacted_support / total_signed_up
+
+# Channel repartition for first contact after signup
+channel_repartition_signup <- customers_support_after_signup %>%
+  group_by(channel) %>%
+  summarize(count = n(), percentage = (n() / total_contacted_support) * 100)
+
+# Probability of contacting support within 7 days after signup
+contact_within_7_days_signup <- customers_support_after_signup %>%
+  filter(days_from_signup <= 7) %>%
+  nrow()
+probability_within_7_days_signup <- contact_within_7_days_signup / total_contacted_support
+
+# Identify customers who contacted support at least once
+customers_support_once <- customer_cases %>%
+  filter(reason == "support") %>%
+  group_by(customer_id) %>%
+  summarize(support_contacts = n(), first_support_time = min(date_time)) %>%
+  filter(support_contacts >= 1)
+
+# Determine which customers contacted support a second time
+customers_support_twice <- customer_cases %>%
+  filter(reason == "support") %>%
+  group_by(customer_id) %>%
+  summarize(support_contacts = n(), second_support_time = max(date_time)) %>%
+  filter(support_contacts >= 2) %>%
+  inner_join(customers_support_once, by = "customer_id") %>%
+  mutate(days_between_1st_and_2nd = as.numeric(difftime(second_support_time, first_support_time, units = "days")))
+
+# Calculate the probability and channel repartition
+total_support_once <- nrow(customers_support_once)
+total_support_twice <- nrow(customers_support_twice)
+probability_support_twice <- total_support_twice / total_support_once
+
+# Channel repartition for second support contact
+channel_repartition_twice <- customer_cases %>%
+  filter(reason == "support" & customer_id %in% customers_support_twice$customer_id) %>%
+  group_by(channel) %>%
+  summarize(count = n(), percentage = (n() / total_support_twice) * 100)
+
+# Probability of contacting support within 7 days after the first support call
+contact_within_7_days_twice <- customers_support_twice %>%
+  filter(days_between_1st_and_2nd <= 7) %>%
+  nrow()
+probability_within_7_days_twice <- contact_within_7_days_twice / total_support_twice
+
+# Identify customers who contacted support at least twice
+customers_support_thrice <- customers_support_twice %>%
+  inner_join(customer_cases %>%
+               filter(reason == "support") %>%
+               group_by(customer_id) %>%
+               summarize(third_support_time = max(date_time)) %>%
+               filter(n() >= 3),
+             by = "customer_id") %>%
+  mutate(days_between_2nd_and_3rd = as.numeric(difftime(third_support_time, second_support_time, units = "days")))
+
+# Calculate the probability and channel repartition
+total_support_thrice <- nrow(customers_support_thrice)
+probability_support_thrice <- total_support_thrice / total_support_twice
+
+# Channel repartition for third support contact
+channel_repartition_thrice <- customer_cases %>%
+  filter(reason == "support" & customer_id %in% customers_support_thrice$customer_id) %>%
+  group_by(channel) %>%
+  summarize(count = n(), percentage = (n() / total_support_thrice) * 100)
+
+# Probability of contacting support within 7 days after the second support call
+contact_within_7_days_thrice <- customers_support_thrice %>%
+  filter(days_between_2nd_and_3rd <= 7) %>%
+  nrow()
+probability_within_7_days_thrice <- contact_within_7_days_thrice / total_support_thrice
+
+# Identify customers who contacted support at least three times
+customers_support_four_times <- customers_support_thrice %>%
+  inner_join(customer_cases %>%
+               filter(reason == "support") %>%
+               group_by(customer_id) %>%
+               summarize(fourth_support_time = max(date_time)) %>%
+               filter(n() >= 4),
+             by = "customer_id") %>%
+  mutate(days_between_3rd_and_4th = as.numeric(difftime(fourth_support_time, third_support_time, units = "days")))
+
+# Calculate the probability and channel repartition
+total_support_four_times <- nrow(customers_support_four_times)
+probability_support_four_times <- total_support_four_times / total_support_thrice
+
+# Channel repartition for fourth support contact
+channel_repartition_four_times <- customer_cases %>%
+  filter(reason == "support" & customer_id %in% customers_support_four_times$customer_id) %>%
+  group_by(channel) %>%
+  summarize(count = n(), percentage = (n() / total_support_four_times) * 100)
+
+# Probability of contacting support within 7 days after the third support call
+contact_within_7_days_four_times <- customers_support_four_times %>%
+  filter(days_between_3rd_and_4th <= 7) %>%
+  nrow()
+probability_within_7_days_four_times <- contact_within_7_days_four_times / total_support_four_times
+
+```
+
+```{r, eval=FALSE}
+# Output the results for signup
+cat("The probability that a customer will contact support after signing up is:", 
+    round(probability_support_after_signup * 100, 2), "%\n")
+cat("Channel repartition for first support contact after signup:\n")
+print(channel_repartition_signup)
+cat("Percentage of customers contacting support within 7 days after signup:", 
+    round(probability_within_7_days_signup * 100, 2), "%\n\n")
+
+# Output the results for the second support contact
+cat("The probability that a customer who has contacted support once will contact support a second time is:", 
+    round(probability_support_twice * 100, 2), "%\n")
+cat("Channel repartition for the second support contact:\n")
+print(channel_repartition_twice)
+cat("Percentage of customers contacting support within 7 days after the first support contact:", 
+    round(probability_within_7_days_twice * 100, 2), "%\n\n")
+
+# Output the results for the third support contact
+cat("The probability that a customer who has contacted support twice will contact support a third time is:", 
+    round(probability_support_thrice * 100, 2), "%\n")
+cat("Channel repartition for the third support contact:\n")
+print(channel_repartition_thrice)
+cat("Percentage of customers contacting support within 7 days after the second support contact:", 
+    round(probability_within_7_days_thrice * 100, 2), "%\n\n")
+
+# Output the results for the fourth support contact
+cat("The probability that a customer who has contacted support three times will contact support a fourth time is:", 
+    round(probability_support_four_times * 100, 2), "%\n")
+cat("Channel repartition for the fourth support contact:\n")
+print(channel_repartition_four_times)
+cat("Percentage of customers contacting support within 7 days after the third support contact:", 
+    round(probability_within_7_days_four_times * 100, 2), "%\n")
+
+```
+
+
+## Analysis of Customer Support Contact Patterns
+
+```{r, results='hide', eval=FALSE, fig.keep = "none"}
+# Removed text
+
+### 1. Summary of Probabilities and Contact Timing
+
+- **Probability that a customer will contact support after signing up**: 41.73%
+  - **Percentage of customers contacting support within 7 days after signup**: 2.82%
+
+- **Probability that a customer who has contacted support once will contact support a second time**: 13.47%
+  - **Percentage of customers contacting support within 7 days after the first support contact**: 4.6%
+
+- **Probability that a customer who has contacted support twice will contact support a third time**: 4.2%
+
+- **Probability that a customer who has contacted support three times will contact support a fourth time**: 1.8%
+
+```
+
+
+### 1. Visual Analysis
+
+#### Distribution of Reasons by Channel
+
+```{r, results="hide", fig.keep = "none"}
+
+# Analyze the distribution of channels
+channel_distribution <- customer_cases %>%
+  count(channel) %>%
+  mutate(percentage = n / sum(n) * 100)
+
+# Analyze the distribution of reasons
+reason_distribution <- customer_cases %>%
+  count(reason) %>%
+  mutate(percentage = n / sum(n) * 100)
+
+# Analyze the relationship between channel and reason
+channel_reason_distribution <- customer_cases %>%
+  count(channel, reason) %>%
+  group_by(channel) %>%
+  mutate(percentage = n / sum(n) * 100) %>%
+  ungroup()
+
+# Stacked bar plot for channel and reason
+ggplot(channel_reason_distribution, aes(x = channel, y = n, fill = reason)) +
+  geom_bar(stat = "identity", position = "stack") +
+  labs(title = "Distribution of Reasons by Channel",
+       x = "Channel",
+       y = "Count",
+       fill = "Reason") +
+  theme_minimal()
+
+```
+
+- The majority of customer interactions (both signup and support) occur through the phone channel, with email being significantly less utilized. This suggests that customers prefer real-time communication with the support.
+
+#### Number of Customers by Support Interval and Channel
+```{r, fig.width=9, fig.height=4}
+
+# Convert customer_counts_extended to a long format
+long_format_with_channel <- customer_counts_extended %>%
+  select(customer_id, starts_with("time_from_support_")) %>%
+  pivot_longer(cols = starts_with("time_from_support_"),
+               names_to = "support_interval",
+               values_to = "days_between_supports") %>%
+  mutate(support_interval = case_when(
+    support_interval == "time_from_signup_to_first_support" ~ "Signup to 1st Support",
+    support_interval == "time_from_support_1_to_support_2" ~ "Support 1 to 2",
+    support_interval == "time_from_support_2_to_support_3" ~ "Support 2 to 3",
+    support_interval == "time_from_support_3_to_support_4" ~ "Support 3 to 4",
+    TRUE ~ support_interval  # Retain other intervals as is
+  )) %>%
+  filter(!is.na(days_between_supports))
+
+# Add the channel information from customer_cases
+long_format_with_channel <- long_format_with_channel %>%
+  left_join(customer_cases %>%
+              filter(reason == "support") %>%
+              select(customer_id, date_time, channel),
+            by = "customer_id",
+            relationship = "many-to-many") %>%
+  distinct(customer_id, support_interval, channel, .keep_all = TRUE)
+
+# Count the number of customers for each support interval and channel
+customer_count_by_channel <- long_format_with_channel %>%
+  group_by(support_interval, channel) %>%
+  summarize(customer_count = n(), .groups = 'drop')
+
+# Create the bar plot with data labels
+ggplot(customer_count_by_channel, aes(x = support_interval, y = customer_count, fill = channel)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  geom_text(aes(label = customer_count), 
+            position = position_dodge(width = 0.9), 
+            vjust = -0.3, 
+            size = 3) +
+  labs(title = "Number of Customers by Support Interval and Channel",
+       x = "Support Interval",
+       y = "Number of Customers",
+       fill = "Channel") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+```
+
+- The largest group of customers contacts support for the first time through the phone, and only a smaller fraction moves on to a second or third support interaction. By the time a third or fourth support interaction occurs, the number of customers decreases sharply, indicating that most issues are resolved within the first two interactions.
+
+#### Customer Flow from Signup to Support and Cancellation
+```{r, fig.width=6, fig.height=2, results='hide', eval=FALSE, fig.keep = "none"}
+
+library(dplyr)
+library(tidyr)
+
+# Combine customer_product and customer_cases datasets
+customer_cases <- customer_cases %>%
+  rename(case_date_time = date_time)
+
+customer_product <- customer_product %>%
+  rename(signup_case_date_time = signup_date_time)
+
+# Create a dataset with signup, support contact, and cancellation
+customer_flow <- customer_cases %>%
+  select(customer_id, case_date_time, reason) %>%
+  bind_rows(customer_product %>%
+              select(customer_id, signup_case_date_time) %>%
+              mutate(reason = "signup", case_date_time = signup_case_date_time) %>%
+              select(-signup_case_date_time)) %>%
+  bind_rows(customer_product %>%
+              select(customer_id, cancel_date_time) %>%
+              filter(!is.na(cancel_date_time)) %>%
+              mutate(reason = "cancellation", case_date_time = cancel_date_time) %>%
+              select(-cancel_date_time))
+
+
+# Sort events for each customer by date
+customer_flow <- customer_flow %>%
+  arrange(customer_id, case_date_time)
+
+# Create a sequence of events for each customer
+customer_flow_sequence <- customer_flow %>%
+  group_by(customer_id) %>%
+  summarize(flow_sequence = paste(reason, collapse = " -> "))
+
+library(ggplot2)
+
+# Plot customer flow as a Gantt chart for a subset of customers
+customer_flow_long <- customer_flow %>%
+  filter(customer_id %in% sample(unique(customer_id), 10)) %>%
+  mutate(reason = factor(reason, levels = c("signup", "support", "cancellation")))
+
+ggplot(customer_flow_long, aes(x = case_date_time, y = customer_id, color = reason)) +
+  geom_point(size = 3) +
+  geom_line(aes(group = customer_id)) +
+  labs(title = "Customer Flow from Signup to Support and Cancellation",
+       x = "Date",
+       y = "Customer ID") +
+  theme_minimal()
+
+
+```
+```{r, results='hide', eval=FALSE}
+# Removed text
+
+- The flow chart visualizes the journey of a sample of customers from signup through to support and, in some cases, cancellation. It is difficult to visualize all customers on the same plot, so a clear behavior between subscription and cancellation cannot be identify.
+
+```
+
+
+
+#### Average Days Between Support Contacts and Signup to Support
+```{r, results="hide", fig.keep = "none"}
+
+# Convert the data to a long format for plot
+long_format <- customer_counts_extended %>%
+  pivot_longer(cols = starts_with("time_from_support_"),
+               names_to = "support_interval",
+               values_to = "days_between_supports") %>%
+  filter(!is.na(days_between_supports))
+
+# Calculate mean time from signup to first support contact
+mean_signup_to_support <- customer_counts_extended %>%
+  summarize(mean_days_signup_to_support = mean(time_from_signup_to_first_support, na.rm = TRUE)) %>%
+  mutate(support_interval = "time_from_signup_to_support")
+
+# Calculate the mean days between support contacts for each interval
+mean_days_between_supports <- long_format %>%
+  group_by(support_interval) %>%
+  summarize(mean_days = mean(days_between_supports, na.rm = TRUE))
+
+# Combine both mean calculations into one data frame
+combined_mean_times <- bind_rows(mean_days_between_supports, mean_signup_to_support %>%
+                                   rename(mean_days = mean_days_signup_to_support))
+
+# Create the bar plot
+ggplot(combined_mean_times, aes(x = support_interval, y = mean_days, fill = support_interval)) +
+  geom_bar(stat = "identity") +
+  labs(title = "Average Days Between Support Contacts and Signup to Support",
+       x = "Support Interval",
+       y = "Average Days") +
+  theme_minimal() +
+  theme(axis.text.x = element_blank(),
+        axis.ticks.x = element_blank(),
+        legend.position = "right")      
+
+```
+
+- On average, the time between signup and the first support contact is about 150 days, while subsequent support interactions tend to occur at shorter intervals. The reduced time between later support contacts might suggest unresolved issues or increasing customer frustration.
+
+```{r, fig.width=6, fig.height=2}
+# Convert the data to a long format
+long_format <- customer_counts_extended %>%
+  pivot_longer(cols = starts_with("time_from_support_"),
+               names_to = "support_interval",
+               values_to = "days_between_supports") %>%
+  filter(!is.na(days_between_supports))  
+
+# Add the time from signup to first support to the long format data
+signup_to_support <- customer_counts_extended %>%
+  select(customer_id, time_from_signup_to_first_support) %>%
+  filter(!is.na(time_from_signup_to_first_support)) %>%
+  mutate(support_interval = "Signup to 1st Support") %>%
+  rename(days_between_supports = time_from_signup_to_first_support)
+
+# Rename labels
+long_format <- long_format %>%
+  mutate(support_interval = case_when(
+    support_interval == "time_from_support_1_to_support_2" ~ "Support 1 to 2",
+    support_interval == "time_from_support_2_to_support_3" ~ "Support 2 to 3",
+    support_interval == "time_from_support_3_to_support_4" ~ "Support 3 to 4",
+    TRUE ~ support_interval  
+  ))
+
+combined_long_format <- bind_rows(long_format, signup_to_support)
+
+# Create the box plot with hidden x-axis labels
+ggplot(combined_long_format, aes(x = support_interval, y = days_between_supports, fill = support_interval)) +
+  geom_boxplot() +
+  labs(title = "Distribution of Days Between Support Contacts and Signup to Support",
+       x = "Support Interval",
+       y = "Days Between Contacts") +
+  theme_minimal() +
+  theme(axis.text.x = element_blank(),
+        axis.ticks.x = element_blank(),
+        legend.position = "right")
+
+
+```
+
+- However, when plotting the distribution of days between support contacts, it shows significant variability, particularly between the first and second interactions. The decrease in variability for later support contacts suggests that customers who need repeated support tend to do so in quicker succession.
+
+### 2. Conclusion
+- **Channel Preference**: Phone is the preferred channel for support.
+- **Support Contact**: Most customer issues are addressed within the first or second support contact, but those requiring repeated support tend to escalate their interactions, with shorter intervals between contacts.
+- **Timing**: A significant portion of customers are making their first contact for support within 150 days of signup.
+
+## Analysis of Product
+
+They are two products : Product one, costing 1200 (currency unknown) and billed annually ; Product two, costing 125 and billed annually. If you subscribe to product two for a year, it's going to be more expensive than product one. They are more people subscribed to product one than product two, maybe because of the price advantage offered by the annual billing.
+
+```{r, fig.width=6, fig.height=4, results='hide', fig.keep = "none"}
+ggplot(customer_product, aes(x = product, fill = cancellation)) +
+  geom_bar(position = "dodge") +
+  scale_y_continuous(labels = scales::comma) +
+  labs(title = "Number of Customers Subscribed to Each Product Category",
+       x = "Product Category",
+       y = "Number of Customers",
+       fill = "Cancellation Status") +
+  theme_minimal()
+```
+# Kaplan-Meier Survival Analysis
+
+## Stratified by product
+
+```{r, results='hide', message=FALSE, warning=FALSE}
+library(survival)
+library(survminer)
+
+# Create a survival object
+surv_object <- Surv(time = customer_product$duration, 
+                    event = customer_product$cancellation == "Yes")
+
+# Fit the Kaplan-Meier estimator
+km_fit <- survfit(surv_object ~ customer_product$product)
+
+# Summary of the fit (uncomment to display)
+# summary(km_fit)
+```
+
+### 1. Introduction
+In this analysis, we used the Kaplan-Meier estimator to estimate the survival probability of customers who subscribed to different product types (`prd_1` and `prd_2`). The survival probability represents the likelihood that a customer remains subscribed over time. The goal is to compare the retention rates between these product types.
+
+### 2. Methodology
+- **Survival Object Construction**: 
+  - We created a survival object, where the `duration` represents the time (in days) until a customer cancels their subscription, and the `cancellation` variable indicates whether the cancellation occurred (`Yes`) or (`No`).
+  
+- **Kaplan-Meier Estimator**: 
+  - We fitted the Kaplan-Meier estimator, stratifying by `product` to estimate and compare the survival curves for `prd_1` and `prd_2`.
+  
+- **Log-Rank Test**: 
+  - A log-rank test was performed to assess whether the differences in survival between the product types are statistically significant.
+
+### 3. Results
+```{r, fig.width=6, fig.height=2}
+
+# Plot Kaplan-Meier survival curves
+ggsurvplot(km_fit, 
+           data = customer_product,
+           pval = TRUE,                   
+           conf.int = TRUE,               
+           risk.table = FALSE,             
+           xlab = "Days",
+           ylab = "Survival Probability",
+           title = "Kaplan-Meier Survival Curves by Product Type",
+           ggtheme = theme_minimal())     
+
+```
+- **Survival Probability**: 
+  - The survival curves show that the probability of a customer remaining subscribed decreases over time for both product types.
+  - **Product `prd_2`** generally has a higher survival probability compared to **Product `prd_1`**, indicating better retention for `prd_2`.
+
+- **Statistical Significance**: 
+  - The p-value from the log-rank test (`p < 0.0001`) indicates a statistically significant difference in survival between the two product types, suggesting that the observed differences are unlikely due to chance.
+
+- **Confidence Intervals**: 
+  - The confidence intervals around the survival curves are narrow, providing a high degree of confidence in the estimated survival probabilities.
+
+- **Number at Risk**: 
+  - The "Number at risk" table shows the number of customers still subscribed at various time points for each product, highlighting the decline in subscriptions over time.
+
+### 4. Conclusion
+The Kaplan-Meier analysis reveals that customers subscribed to `prd_2` have a better retention rate compared to those subscribed to `prd_1`. The significant difference in survival probabilities between the two product types suggests that `prd_2` may offer greater value or satisfaction to customers, leading to longer subscription duration.
+
+## Stratified by Age Group
+
+### 1. Introduction
+We did the same as previously but focused on age instead of products.
+
+### 2. Results
+
+```{r, results='hide', fig.keep = "none"}
+# Merge the datasets on customer_id
+merged_data <- merge(customer_product, customer_info, by = "customer_id")
+
+# Create age groups
+merged_data$age_group <- cut(merged_data$age, 
+                             breaks = c(18, 30, 40, 50, 60, 70, Inf), 
+                             labels = c("18-29", "30-39", "40-49", "50-59", "60-69", "70+"))
+
+# Create a survival object
+surv_object <- Surv(time = merged_data$duration, 
+                    event = merged_data$cancellation == "Yes")
+
+# Fit the Kaplan-Meier estimator stratified by age group
+km_fit_age <- survfit(surv_object ~ age_group, data = merged_data)
+
+# Plot Kaplan-Meier survival curves
+ggsurvplot(km_fit_age, 
+           data = merged_data,
+           pval = TRUE,                   
+           conf.int = TRUE,               
+           risk.table = FALSE,            
+           xlab = "Days",
+           ylab = "Survival Probability",
+           title = "Kaplan-Meier Survival Curves by Age Group",
+           ggtheme = theme_minimal(),
+           size = 1.2,                    
+           risk.table.height = 0.5)  
+```
+
+
+- **Survival Probability**: 
+  - The survival curves show that the probability of a customer remaining subscribed decreases over time across all age groups. 
+  - There is a slight variation among the age groups, with younger age groups (e.g., 18-29) initially showing lower survival probabilities compared to older age groups, although these differences diminish over time.
+
+- **Statistical Significance**: 
+  - The p-value from the log-rank test (`p = 0.013`) indicates that the differences in survival probabilities across age groups are statistically significant, though the practical differences between the groups are small.
+
+### 3. Conclusion
+The Kaplan-Meier analysis stratified by age group reveals some differences in retention rates among different age groups, with younger customers showing slightly lower retention initially. However, these differences are not substantial, suggesting that age alone is not a strong predictor of retention.
+
+## Stratified by Age Group and Product
+
+### 1. Introduction
+We did the same as previously but focused on age and products.
+
+```{r, fig.width=6, fig.height=4}
+library(stringr)
+
+# Modify the data to change labels
+merged_data <- merged_data %>%
+  mutate(
+    product_age_group = str_replace_all(
+      interaction(product, age_group, sep = ", "), 
+      c("product=" = "", "age_group=" = "")
+    )
+  )
+
+# Create a survival object
+surv_object <- Surv(time = merged_data$duration, 
+                    event = merged_data$cancellation == "Yes")
+
+# Fit the Kaplan-Meier estimator
+km_fit_age <- survfit(surv_object ~ product_age_group, data = merged_data)
+
+# Plot Kaplan-Meier survival curves with the modified legend labels
+ggsurvplot(km_fit_age, 
+           data = merged_data,
+           pval = TRUE,                   
+           conf.int = TRUE,               
+           risk.table = FALSE,            
+           xlab = "Days",
+           ylab = "Survival Probability",
+           title = "Kaplan-Meier Survival Curves by Product Type and Age Group",
+           ggtheme = theme_minimal(),
+           legend = "right")              
+
+```
+
+### 2. Results
+- **Survival Probability**: 
+  - Within each product type, there is some variation among the same age group (e.g., 18-29). For example, for product 1, younger age groups have higher survival probabilities than for product 2.
+
+### 3. Conclusion
+The Kaplan-Meier analysis, stratified by both product type and age group, reveals that **Product `prd_2`** generally has better retention across all age groups compared to **Product `prd_1`**. While age differences do exist, the product type appears to have a more substantial impact on customer retention. The statistically significant p-value reinforces the importance of considering both product type and age group in retention strategies.
+
+# Analysis of Nonparametric Comparison of Two or More Groups
+
+## 1. Introduction
+
+In this analysis, we performed a nonparametric comparison of survival distributions across multiple groups using the log-rank test. The groups were defined by combinations of product type and age group, and the goal was to assess whether there were statistically significant differences in the survival distributions among these groups.
+
+## 2. Methodology
+
+- **Log-Rank Test (`survdiff`)**:
+    - The log-rank test was used to compare the survival curves across the different `product_age_group` combinations. This test assesses whether there are significant differences in the time to cancellation between the groups.
+    - The test statistic is a chi-square statistic, with the degrees of freedom equal to the number of groups minus one.
+
+- **Pairwise Comparisons (`pairwise_survdiff`)**:
+    - In addition to the overall log-rank test, pairwise comparisons were conducted to identify specific pairs of groups that showed significant differences in their survival distributions.
+
+## 3. Results
+
+- **Overall Log-Rank Test**:
+    - The chi-square statistic for the overall log-rank test was 2841, with 11 degrees of freedom.
+    - The p-value was less than 2e-16, indicating that there are significant differences in the survival distributions among the different product and age group combinations.
+
+- **Chi-Square Contributions**:
+    - The contributions to the chi-square statistic varied across the groups, with some groups (e.g., `prd_1, 50-59` and `prd_2, 50-59`) contributing more to the overall statistic, indicating that these groups had larger discrepancies between observed and expected events.
+
+- **Pairwise Comparisons**:
+    - Pairwise comparisons revealed that most of the significant differences in survival probabilities were between the `prd_1` and `prd_2` groups, across all age groups.
+    - For instance, the comparison between `prd_1, 18-29` and `prd_2, 18-29` showed a highly significant p-value (p = 0.00039), indicating that these two groups have significantly different survival distributions.
+    - Within `prd_1`, differences between age groups were less pronounced, with most pairwise comparisons showing non-significant p-values (e.g., `prd_1, 18-29` vs. `prd_1, 30-39` with p = 0.41476).
+    - On the other hand, significant differences were observed between age groups within `prd_2`, especially when comparing younger and older age groups (e.g., `prd_2, 30-39` vs. `prd_2, 50-59` with p = 0.08772).
+
+## 4. Conclusion
+
+The nonparametric comparison using the log-rank test indicates significant differences in customer retention between different product types and age groups. The largest discrepancies were observed between the two product types (`prd_1` and `prd_2`), with `prd_1` generally showing better survival (retention) rates across all age groups.
+
+- **Product Comparison**:
+    - There is a clear difference in survival distributions between `prd_1` and `prd_2` across all age groups, with `prd_1` consistently showing better retention.
+
+- **Age Group Comparison**:
+    - Within each product type, differences in survival distributions across age groups are less pronounced for `prd_1`. However, `prd_2` shows more variation, especially when comparing younger to older age groups.
+
+This analysis provides evidence that product type significantly impacts customer retention, and age group also plays a role, particularly within the context of `prd_2`. These insights suggest that retention strategies may need to be adapted to the product but also to specific age demographics.
+
+```{r, results='hide'}
+# Perform the log-rank test to compare survival curves between groups
+log_rank_test <- survdiff(surv_object ~ product_age_group, data = merged_data)
+
+# Extract the degrees of freedom as numeric
+df <- length(log_rank_test$n) - 1 
+
+# Format the log-rank test results
+cat("### Log-Rank Test Results ###\n\n")
+cat("Chi-Square Statistic:", round(log_rank_test$chisq, 2), "\n")
+cat("Degrees of Freedom:", df, "\n")
+cat("p-value:", format.pval(1 - pchisq(log_rank_test$chisq, df)), "\n\n")
+
+# Create a table with observed, expected, and (O-E)^2/E and (O-E)^2/V for each group
+log_rank_table <- data.frame(
+  Group = names(log_rank_test$n),
+  N = log_rank_test$n,
+  Observed = log_rank_test$obs,
+  Expected = log_rank_test$exp,
+  `(O-E)^2/E` = round((log_rank_test$obs - log_rank_test$exp)^2 / log_rank_test$exp, 2),
+  `(O-E)^2/V` = round((log_rank_test$obs - log_rank_test$exp)^2 / diag(log_rank_test$var), 2)
+)
+```
+
+
+```{r, eval=FALSE}
+print(log_rank_table)
+```
+
+
+```{r, results='hide'}
+# pairwise_survdiff function to compare multiple groups
+pairwise_log_rank_test <- pairwise_survdiff(Surv(duration, cancellation == "Yes") ~ product_age_group, data = merged_data)
+
+# Format the pairwise log-rank test results
+cat("### Pairwise Log-Rank Test Results ###\n\n")
+
+# Convert the pairwise results to a data frame
+pairwise_table <- as.data.frame(as.table(pairwise_log_rank_test$p.value))
+names(pairwise_table) <- c("Group1", "Group2", "p-value")
+
+# Format the p-values
+pairwise_table$`p-value` <- format.pval(pairwise_table$`p-value`, digits = 3)
+```
+
+
+```{r, eval=FALSE}
+print(pairwise_table)
+```
+
+```{r}
+library(dplyr)
+library(tidyr)
+
+# Modify merged_data to keep only rows where cancellation is "Yes"
+merged_data <- merged_data %>%
+  filter(cancellation == "Yes")
+
+# Add total_cost column to merged_data
+merged_data <- merged_data %>%
+  mutate(
+    total_cost = case_when(
+      product == "prd_1" ~ (duration / 365) * 1200,  # Calculate total cost for Product 1 (annual)
+      product == "prd_2" ~ (duration / 30) * 125,    # Calculate total cost for Product 2 (monthly)
+      TRUE ~ 0
+    )
+  )
+
+# Round total_cost to 2 decimal places
+merged_data$total_cost <- round(merged_data$total_cost, 2)
+
+# Capping extreme values of cost to reduce influence of outliers
+quantile_value <- quantile(merged_data$total_cost, 0.95)
+merged_data$adjusted_cost <- pmin(merged_data$total_cost, quantile_value)
+
+# Log tranformation of total cost
+merged_data$log_total_cost <- log(merged_data$adjusted_cost + 1)
+```
+
+```{r}
+# Create a summary of the number of support contacts for each customer
+support_counts <- customer_cases %>%
+  filter(reason == "support") %>%
+  group_by(customer_id) %>%
+  summarize(support_count = n())
+
+# Merge this summary with the merged_data
+merged_data <- merged_data %>%
+  left_join(support_counts, by = "customer_id") %>%
+  mutate(support_count = ifelse(is.na(support_count), 0, support_count))
+
+```
+
+```{r}
+
+# Standardize log_total_cost, the age and support_count variables
+merged_data <- merged_data %>%
+  mutate(
+    age_scaled = scale(age),
+    support_count_scaled = scale(support_count),
+    log_total_cost_scaled = scale(log_total_cost)
+  )
+
+```
+
+
+```{r}
+library(survival)
+library(survminer)
+
+# Create a survival object
+surv_object <- Surv(time = merged_data$duration, 
+                    event = merged_data$cancellation == "Yes")
+
+# Fit the Cox proportional hazards model
+cox_model <- coxph(
+  formula = surv_object ~ factor(product) + age_scaled + factor(gender) + support_count_scaled,
+  data = merged_data
+)
+```
+
+
+```{r, eval=FALSE}
+# Print the summary of the Cox model
+summary(cox_model)
+
+```
+
+```{r, eval=FALSE}
+# Check the proportional hazards assumption
+cox_zph <- cox.zph(cox_model)
+print(cox_zph)
+```
+
+```{r, eval=FALSE}
+# Check the proportional hazards assumption
+plot(cox_zph)
+```
+
+```{r, eval=FALSE}
+# Evaluate the model's concordance index
+summary(cox_model)$concordance
+```
+
+
+```{r, eval=FALSE}
+# Interpret hazard ratios
+exp(coef(cox_model))
+```
+
+
+# Cox Proportional Hazards Model Analysis
+
+## 1. Introduction
+In this analysis, we fit a Cox Proportional Hazards model to evaluate the impact of product type, age, gender, and support count on customer survival (i.e., the time until cancellation of the subscription). The survival probability represents the likelihood that a customer remains subscribed over time, adjusting for the specified covariates.
+
+## 2. Methodology
+- **Cox Model Construction**: 
+  - We constructed a Cox model using `product` type, `age`, `gender`, and `support_count` as covariates. The `duration` represents the time (in days) until a customer cancels their subscription, and the `cancellation` variable indicates whether the cancellation occurred (`Yes`). 
+
+- **Exploratory Attempts**:
+  - We initially attempted to include the total cost paid by a customer up until cancellation as a covariate in the model. However, this caused significant overfitting, as indicated by a substantial increase in the concordance index, but with unrealistic predictions and unstable hazard ratios.
+  - To mitigate overfitting, we also explored using a regularized Cox model with an elastic-net penalty (a mix of L1 and L2 regularization). Despite this, the model still overfitted when including the total cost, leading us to exclude this variable from the final model.
+
+- **Model Fit and Interpretation**: 
+  - The model was fit on a dataset of 112,485 observations, with 396,447 observations deleted due to missing data (ongoing subscriptions). The output includes the coefficients, hazard ratios (`exp(coef)`), standard errors, and p-values for each covariate.
+
+## 3. Results
+```{r, fig.width=6, fig.height=4, results='hide', fig.keep = "none"}
+library(survminer)
+library(ggplot2)
+
+# Plot the adjusted survival curves
+ggsurvplot(survfit(cox_model, data = merged_data),
+           data = merged_data,
+           conf.int = TRUE,
+           xlab = "Days",
+           ylab = "Survival Probability",
+           ggtheme = theme_minimal(),
+           title = "Cox Proportional Hazards Model - Adjusted Survival Curves")
+```
+- **Covariate Effects**:
+  - **Product Type**: The `prd_2` product type has a significant positive coefficient (`coef = 0.3264`), with a hazard ratio of `1.386`. This indicates that customers who subscribed to `prd_2` are 38.6% more likely to cancel their subscription at any given time compared to those who subscribed to `prd_1`, holding other factors constant.
+  - **Age**: The effect of age on survival is small but statistically significant (`p = 0.00887`), with a hazard ratio of `1.008`. This suggests that older customers have a slightly higher risk of cancellation, though the effect size is minimal.
+  - **Gender**: The effect of gender, specifically being male, shows a non-significant trend (`p = 0.08798`), with a hazard ratio of `1.010`. This indicates that male customers have a slightly higher likelihood of cancellation compared to female customers, but this effect is not statistically significant.
+  - **Support Count**: The `support_count` variable was found to have a minimal and statistically insignificant effect on survival (`p = 0.67431`), with a hazard ratio of `1.001`. This suggests that the number of times a customer contacted support does not substantially affect their likelihood of cancellation.
+
+- **Model Performance**:
+  - **Concordance Index (C-index)**: The model’s concordance index is `0.546`, which indicates a slightly better-than-random ability to predict customer survival based on the covariates. However, this value suggests that the model has limited predictive power.
+  - **Likelihood Ratio Test**: The likelihood ratio test yields a highly significant result (`p < 2e-16`), indicating that the model as a whole is significant and that the covariates contribute to the model’s ability to predict survival.
+
+- **Proportional Hazards Assumption**:
+  - The global test of the proportional hazards assumption (`GLOBAL p < 2e-16`) indicates that there may be some violation of the proportional hazards assumption in this model, particularly for the `product` and `support_count` variables.
+
+## 4. Conclusion
+The Cox Proportional Hazards model indicates that the product type (`prd_2`) has a significant impact on the likelihood of customer cancellation, with customers of `prd_2` being more likely to cancel than those of `prd_1`. Age also has a minor effect on survival, with older customers being slightly more likely to cancel. Gender and support count do not significantly affect the likelihood of cancellation in this model.
+
+### Considerations Regarding Total Cost:
+- Attempts to include the total cost paid by a customer until cancellation led to model overfitting, with an unrealistic increase in predictive performance. Even after applying regularization techniques like the elastic-net Cox model and standardizing the data (filtering extreme values, applying log transformation), the issue persisted, leading to the exclusion of this variable in the final model.
+
+### Overall Assessment:
+While the model identifies some important predictors of customer cancellation, the low concordance index and potential violation of the proportional hazards assumption suggest that the model may have limitations in accurately predicting customer survival. Further exploration with alternative modeling approaches or inclusion of time-varying covariates may be necessary to improve model performance.
+
+
+```{r, eval=FALSE}
+# REGULARISED COX MODEL
+
+library(glmnet)
+library(survival)
+library(parallel)
+library(doParallel)
+
+# Detect the number of available cores
+num_cores <- detectCores()
+
+# Create a cluster with the number of cores
+cl <- makeCluster(num_cores)
+
+# Register parallel cores
+registerDoParallel(cl)
+
+X <- model.matrix(~ factor(product) + age_scaled + factor(gender) + support_count_scaled, data = merged_data)[, -1]
+y <- Surv(merged_data$duration, merged_data$cancellation == "Yes")
+
+# Fit the regularized Cox model
+fit <- cv.glmnet(X, y, family = "cox", alpha = 0.5, parallel = TRUE) # alpha = 0.5 gives an elastic-net mix of L1 and L2
+
+# Stop the cluster
+stopCluster(cl)
+
+```
+
+
+```{r, eval=FALSE}
+
+# Extract the coefficients at the optimal lambda
+coef(fit, s = "lambda.min")
+
+# Convert the coefficients to hazard ratios
+exp(coef(fit, s = "lambda.min"))
+
+
+```
+
+
+```{r, eval=FALSE}
+library(survminer)
+library(survival)
+library(ggplot2)
+
+# Compute linear predictors
+lp <- predict(fit, newx = X, s = "lambda.min", type = "link")
+
+# Fit a Cox model using the linear predictors to obtain survival curves
+coxph_model <- coxph(y ~ lp, data = merged_data)
+
+# Plot the adjusted survival curves
+ggsurvplot(survfit(coxph_model, data = merged_data),
+           conf.int = TRUE,
+           xlab = "Days",
+           ylab = "Survival Probability",
+           ggtheme = theme_minimal(),
+           title = "Cox Proportional Hazards Model - Adjusted Survival Curves")
+
+```
+
+
+```{r, eval=FALSE}
+
+# Check the proportional hazards assumption
+cox_zph <- cox.zph(coxph_model)
+print(cox_zph)
+
+# Plot to check proportionality
+plot(cox_zph)
+
+
+```
+
+
+```{r, eval=FALSE}
+
+# Compute the concordance index
+concordance <- survConcordance(y ~ lp)
+print(concordance$concordance)
+
+
+```
+
+
+```{r, eval=FALSE}
+
+# Extract the coefficients at the optimal lambda as a regular vector
+hr <- as.vector(exp(coef(fit, s = "lambda.min")))
+
+# Assign names to the hazard ratios for clarity in the barplot
+names(hr) <- rownames(coef(fit, s = "lambda.min"))
+
+# Plot the hazard ratios
+barplot(hr, main = "Hazard Ratios", las = 2, col = "lightblue")
+
+
+```
+
+# Conclusion
+
+This project provided a comprehensive analysis of customer retention and attrition using various survival analysis techniques, including Kaplan-Meier survival analysis, nonparametric comparison of groups using the log-rank test, and Cox proportional hazards regression.
+
+## Key Findings
+
+- **Customer Retention Patterns**:
+    - The Kaplan-Meier survival analysis indicated that customers subscribing to `prd_2` have a higher risk of cancellation compared to those subscribing to `prd_1`.
+    - Age was found to have a minor effect on the survival probability, with older customers being slightly more likely to cancel their subscriptions. However, the effect size was minimal.
+    - The analysis revealed that support contacts had an insignificant impact on customer survival, suggesting that the frequency of contacting support does not strongly influence customer attrition.
+
+- **Nonparametric Group Comparisons**:
+    - The log-rank tests highlighted significant differences in survival distributions between different product types and age groups. Specifically, `prd_1` consistently showed better retention across all age groups compared to `prd_2`.
+    - Pairwise comparisons indicated that age group differences within each product type were more pronounced for `prd_2`, especially when comparing younger and older customers.
+
+- **Cox Proportional Hazards Model**:
+    - The Cox model confirmed the significant impact of product type on customer retention, with `prd_2` customers being more likely to cancel their subscriptions.
+    - Attempts to include the total cost paid by customers as a covariate resulted in model overfitting, even after applying regularization techniques like elastic-net Cox models. This suggests that the cost may introduce complexity that requires further exploration with different modeling approaches.
+    - Despite the model’s ability to identify significant predictors, the low concordance index and potential violations of the proportional hazards assumption indicate limitations in the model’s predictive accuracy.
+
+## Recommendations
+
+- **Retention Strategies**: The findings suggest that targeted retention strategies should focus on customers of `prd_2`, as they exhibit a higher likelihood of cancellation. Additionally, the company should consider tailoring interventions based on age demographics, particularly for younger customers within `prd_2`.
+  
+- **Model Improvements**: Given the limitations observed in the Cox model, particularly with the inclusion of total cost, future analyses could explore alternative survival models or time-varying covariates to capture the dynamics of customer retention more accurately. Further investigation into the reasons behind overfitting when including cost-related variables could also yield valuable insights.
+
+In summary, while this analysis provided valuable information into customer retention patterns, there is still room for improving the predictive model.
+
+
